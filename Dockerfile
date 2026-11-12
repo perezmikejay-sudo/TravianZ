@@ -1,3 +1,4 @@
+
 FROM php:8.3-apache
 
 # Install system dependencies
@@ -11,34 +12,53 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Configure and install PHP extensions
+# Install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) \
-    gd \
-    mysqli \
-    pdo \
-    pdo_mysql \
-    zip
+        gd \
+        mysqli \
+        pdo \
+        pdo_mysql \
+        zip
 
 # Enable Apache modules
 RUN a2enmod rewrite headers
 
-# Use the production PHP configuration as a baseline, then apply our overrides
-# so that errors are hidden from end users and logged server-side instead.
+# Production PHP configuration
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
-COPY docker/php/zz-travianz.ini "$PHP_INI_DIR/conf.d/zz-travianz.ini"
 
-# Set working directory
+# Keep the repository's PHP configuration
+COPY docker/php/zz-travianz.ini \
+    /usr/local/etc/php/conf.d/zz-travianz.ini
+
+# Apache document root
 WORKDIR /var/www/html
 
-# Runtime source code is bind-mounted by docker-compose.
-# Keep only minimal folder bootstrap inside the image.
-RUN mkdir -p /var/www/html/var
+# Copy game files into the Docker image
+COPY --chown=www-data:www-data . /var/www/html/
 
-# Configure Apache to use /var/www/html as DocumentRoot
-RUN sed -i 's!/var/www/html!/var/www/html!g' /etc/apache2/sites-available/000-default.conf
+# Configure Apache to allow access to the game
+RUN printf '%s\n' \
+    '<Directory /var/www/html>' \
+    '    Options FollowSymLinks' \
+    '    AllowOverride All' \
+    '    Require all granted' \
+    '    DirectoryIndex index.php index.html' \
+    '</Directory>' \
+    > /etc/apache2/conf-available/travianz.conf \
+    && a2enconf travianz
 
-# Expose Apache port
+# Create writable application directories
+RUN mkdir -p /var/www/html/var \
+    && chown -R www-data:www-data /var/www/html/var \
+    && chmod -R u+rwX,g+rwX /var/www/html/var
+
+# Default permissions for application files
+RUN find /var/www/html -type d -exec chmod 755 {} \; \
+    && find /var/www/html -type f -exec chmod 644 {} \; \
+    && chmod -R u+rwX,g+rwX /var/www/html/var
+
+# Listen on HTTP port 80
 EXPOSE 80
 
 # Start Apache
